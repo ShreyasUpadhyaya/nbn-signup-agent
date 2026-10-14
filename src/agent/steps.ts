@@ -1,7 +1,7 @@
 // The journey as goals, not a fixed list. Each step says when it applies (detected from the URL and
 // live page state) and what must be true afterwards. The runner always runs the first step that applies,
 // so a popup, a reload or a reordered page is handled by whichever step matches what is on screen.
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 import { Escalate, Fail, type RunContext } from './context.js';
 import { checkBox, clickUntil, fillField, poll, selectOption, urlMatches } from './actions.js';
 import { clearPopups } from './popups.js';
@@ -269,15 +269,55 @@ const build_ = (ctx: RunContext) => ctx.page.locator('[role=dialog]').getByRole(
 
 const shotCount = new WeakMap<RunContext, number>();
 
-/** Evidence for a step: taken once its work is done, just before the click that leaves the page. Never on guarded pages. */
-async function snap(ctx: RunContext, label: string) {
+/**
+ * Evidence for a step, taken once its work is done and just before the click that leaves the page.
+ * Cropped to the area the step worked on: from `anchor`, walk up to the nearest dialog, or the first
+ * container at least `minWidth` wide, or holding `minInputs` form controls. Never on guarded pages.
+ */
+async function snap(ctx: RunContext, label: string, anchor: Locator, area: { minWidth?: number; minInputs?: number } = {}) {
   if (ctx.guarded) return;
   const n = (shotCount.get(ctx) ?? 0) + 1;
   shotCount.set(ctx, n);
-  // At the top the sticky header sits in its own place instead of being painted over the form.
-  await ctx.page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-  await ctx.page.waitForTimeout(400);
-  await ctx.page.screenshot({ path: ctx.log.path(`${String(n).padStart(2, '0')}-${label}.png`), fullPage: true }).catch(() => {});
+  const path = ctx.log.path(`${String(n).padStart(2, '0')}-${label}.png`);
+  // Hide whatever floats over the page (header, cart bar, chat widgets), so it is not painted over the area.
+  const hideFloating = () => ctx.page.evaluate(() => {
+    for (const e of Array.from(document.querySelectorAll<HTMLElement>('body *'))) {
+      const pos = getComputedStyle(e).position;
+      if ((pos === 'fixed' || pos === 'sticky') && !e.closest('[role=dialog],.modal') && !e.querySelector('[data-agent-shot]') && !e.hasAttribute('data-agent-shot')) {
+        e.setAttribute('data-agent-hidden', e.style.visibility);
+        e.style.setProperty('visibility', 'hidden', 'important');
+      }
+    }
+  }).catch(() => {});
+  const restoreFloating = () => ctx.page.evaluate(() => {
+    document.querySelectorAll<HTMLElement>('[data-agent-hidden]').forEach((e) => {
+      e.style.visibility = e.getAttribute('data-agent-hidden') || '';
+      e.removeAttribute('data-agent-hidden');
+    });
+  }).catch(() => {});
+  try {
+    const found = await anchor.first().evaluate((el, a) => {
+      document.querySelectorAll('[data-agent-shot]').forEach((x) => x.removeAttribute('data-agent-shot'));
+      const controls = 'input:not([type=hidden]),select,textarea';
+      for (let p: Element | null = el, i = 0; p && p !== document.body && i < 15; p = p.parentElement, i++) {
+        const hit = p.matches('[role=dialog],.modal-content')
+          || (!!a.minWidth && p.getBoundingClientRect().width >= a.minWidth)
+          || (!!a.minInputs && p.querySelectorAll(controls).length >= a.minInputs);
+        if (hit) { p.setAttribute('data-agent-shot', ''); return true; }
+      }
+      return false;
+    }, area, { timeout: 3000 });
+    if (found) {
+      const area = ctx.page.locator('[data-agent-shot]');
+      await area.evaluate((e) => e.scrollIntoView({ block: 'center' }));
+      await ctx.page.waitForTimeout(500); // the portal repaints styled controls (e.g. the privacy tick) a moment after scrolling
+      await hideFloating();
+      // animations: 'disabled' shows animated controls (the portal's tick marks) in their final state.
+      await area.screenshot({ path, animations: 'disabled', timeout: 5000 }).finally(restoreFloating);
+      return;
+    }
+  } catch { /* anchor gone or not visible: fall back to what is on screen */ }
+  await ctx.page.screenshot({ path, animations: 'disabled' }).catch(() => {});
 }
 
 const address: Step = {
@@ -306,7 +346,7 @@ const address: Step = {
     }
     await awaitAddressResult(ctx, true);
     await ctx.page.waitForTimeout(1500); // the handout's pause before Build Your Plan
-    await snap(ctx, 'address');
+    await snap(ctx, 'address', build_(ctx));
     const ok = await clickUntil(ctx, I.buildYourPlan, async () => !(await build_(ctx).count()), { attempts: 3 });
     if (!ok) throw new Escalate('Build Your Plan did not close the address popup');
     ctx.facts.addressConfirmed = true;
@@ -329,7 +369,9 @@ const plan: Step = {
   when: async (ctx) => onShop(ctx) && !!ctx.facts.addressConfirmed && !(await planInCart(ctx)),
   run: async (ctx) => {
     await selectPlan(ctx);
-    await snap(ctx, 'plan');
+    const chosen = ctx.page.getByRole('button', { name: `${ctx.job.plan.name} has been selected` })
+      .or(ctx.page.locator('button[data-product-type="speed"]').filter({ hasText: /selected/i })).filter({ visible: true });
+    await snap(ctx, 'plan', chosen, { minWidth: 1000 }); // the row of plan cards
   },
 };
 
@@ -365,7 +407,8 @@ const router: Step = {
       ctx.log.warn(`cart dropped to $${(await cartTotal(ctx.page)).toFixed(2)} after choosing the router; re-selecting the plan`);
       await selectPlan(ctx);
     }
-    await snap(ctx, 'router');
+    const routerCard = ctx.page.getByRole('tabpanel', { name: r.tab }).getByRole('button').filter({ hasText: /^\s*Selected\s*$/ }).filter({ visible: true });
+    await snap(ctx, 'router', routerCard, { minWidth: 1000 }); // the router section
   },
 };
 
@@ -380,7 +423,7 @@ const orderNow: Step = {
       await selectPlan(ctx);
     }
     ctx.facts.cartTotal = (await cartTotal(ctx.page)).toFixed(2);
-    await snap(ctx, 'orderNow');
+    await snap(ctx, 'orderNow', ctx.page.getByText(/^\s*order summary\s*$/i).filter({ visible: true }), { minWidth: 900 }); // the order summary
     // The BYO-router popup is answered by the popup rules ("Agree and Continue"); Hold on! fails the run.
     const ok = await clickUntil(ctx, I.orderNow, () => urlMatches(ctx, /\/checkout\//, 1500), { attempts: 3, waitMs: 5000 });
     if (!ok) throw new Escalate('Order Now did not open checkout');
@@ -395,7 +438,7 @@ const login: Step = {
   run: async (ctx) => {
     await fillField(ctx, I.email, ctx.job.customer.email);
     await ctx.page.waitForTimeout(800);
-    await snap(ctx, 'login');
+    await snap(ctx, 'login', ctx.page.locator('input[type=email]').filter({ visible: true }), { minWidth: 400 });
     const otp = ctx.page.locator('#otp_code').or(ctx.page.getByRole('textbox', { name: /otp|one[- ]time|verification code/i })).filter({ visible: true });
     const seen = { outcome: 'none' as 'contact' | 'otp' | 'none' };
     await clickUntil(ctx, I.emailNext, async () => {
@@ -431,7 +474,8 @@ const contact: Step = {
 
 /** Click Next and verify the URL moved on; on validation errors, report them as the escalation reason. */
 async function submitPage(ctx: RunContext, page: string, next: RegExp, intent: Intent = I.next(page), waitMs = 6000) {
-  await snap(ctx, page);
+  // The checkout form: the nearest container of the submit button holding several fields.
+  await snap(ctx, page, ctx.page.getByRole('button', { name: /^\s*(next|process order.*)\s*$/i }).filter({ visible: true }), { minInputs: 2 });
   const ok = await clickUntil(ctx, intent, () => urlMatches(ctx, next, 1000), { attempts: 3, waitMs });
   if (ok) return;
   const errors = await ctx.page.locator('.help-block, small[data-bv-validator], .invalid-feedback, .error-message').filter({ visible: true }).allInnerTexts();
