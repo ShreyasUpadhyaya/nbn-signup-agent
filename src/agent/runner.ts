@@ -110,7 +110,6 @@ export async function runJob(job: Job, opts: RunOptions = {}): Promise<Report> {
         continue;
       }
       ctx.completedSteps.push(step.id);
-      if (!ctx.guarded) await ctx.page.screenshot({ path: log.path(`${String(n).padStart(2, '0')}-${step.id}.png`) }).catch(() => {});
       if (step.terminal) break;
     }
     status = 'success';

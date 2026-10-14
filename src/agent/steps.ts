@@ -267,6 +267,19 @@ async function awaitAddressResult(ctx: RunContext, allowManual: boolean) {
 const build_ = (ctx: RunContext) => ctx.page.locator('[role=dialog]').getByRole('link', { name: /build your plan|see plans/i }).filter({ visible: true })
   .or(ctx.page.locator('[role=dialog] a.okbutton').filter({ visible: true }));
 
+const shotCount = new WeakMap<RunContext, number>();
+
+/** Evidence for a step: taken once its work is done, just before the click that leaves the page. Never on guarded pages. */
+async function snap(ctx: RunContext, label: string) {
+  if (ctx.guarded) return;
+  const n = (shotCount.get(ctx) ?? 0) + 1;
+  shotCount.set(ctx, n);
+  // At the top the sticky header sits in its own place instead of being painted over the form.
+  await ctx.page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+  await ctx.page.waitForTimeout(400);
+  await ctx.page.screenshot({ path: ctx.log.path(`${String(n).padStart(2, '0')}-${label}.png`), fullPage: true }).catch(() => {});
+}
+
 const address: Step = {
   id: 'address',
   shopFlow: true,
@@ -293,6 +306,7 @@ const address: Step = {
     }
     await awaitAddressResult(ctx, true);
     await ctx.page.waitForTimeout(1500); // the handout's pause before Build Your Plan
+    await snap(ctx, 'address');
     const ok = await clickUntil(ctx, I.buildYourPlan, async () => !(await build_(ctx).count()), { attempts: 3 });
     if (!ok) throw new Escalate('Build Your Plan did not close the address popup');
     ctx.facts.addressConfirmed = true;
@@ -313,7 +327,10 @@ const plan: Step = {
   id: 'plan',
   shopFlow: true,
   when: async (ctx) => onShop(ctx) && !!ctx.facts.addressConfirmed && !(await planInCart(ctx)),
-  run: selectPlan,
+  run: async (ctx) => {
+    await selectPlan(ctx);
+    await snap(ctx, 'plan');
+  },
 };
 
 const router: Step = {
@@ -348,6 +365,7 @@ const router: Step = {
       ctx.log.warn(`cart dropped to $${(await cartTotal(ctx.page)).toFixed(2)} after choosing the router; re-selecting the plan`);
       await selectPlan(ctx);
     }
+    await snap(ctx, 'router');
   },
 };
 
@@ -362,6 +380,7 @@ const orderNow: Step = {
       await selectPlan(ctx);
     }
     ctx.facts.cartTotal = (await cartTotal(ctx.page)).toFixed(2);
+    await snap(ctx, 'orderNow');
     // The BYO-router popup is answered by the popup rules ("Agree and Continue"); Hold on! fails the run.
     const ok = await clickUntil(ctx, I.orderNow, () => urlMatches(ctx, /\/checkout\//, 1500), { attempts: 3, waitMs: 5000 });
     if (!ok) throw new Escalate('Order Now did not open checkout');
@@ -376,6 +395,7 @@ const login: Step = {
   run: async (ctx) => {
     await fillField(ctx, I.email, ctx.job.customer.email);
     await ctx.page.waitForTimeout(800);
+    await snap(ctx, 'login');
     const otp = ctx.page.locator('#otp_code').or(ctx.page.getByRole('textbox', { name: /otp|one[- ]time|verification code/i })).filter({ visible: true });
     const seen = { outcome: 'none' as 'contact' | 'otp' | 'none' };
     await clickUntil(ctx, I.emailNext, async () => {
@@ -411,6 +431,7 @@ const contact: Step = {
 
 /** Click Next and verify the URL moved on; on validation errors, report them as the escalation reason. */
 async function submitPage(ctx: RunContext, page: string, next: RegExp, intent: Intent = I.next(page), waitMs = 6000) {
+  await snap(ctx, page);
   const ok = await clickUntil(ctx, intent, () => urlMatches(ctx, next, 1000), { attempts: 3, waitMs });
   if (ok) return;
   const errors = await ctx.page.locator('.help-block, small[data-bv-validator], .invalid-feedback, .error-message').filter({ visible: true }).allInnerTexts();
