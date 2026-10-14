@@ -1,0 +1,48 @@
+{
+  "portal": {
+    "url": "https://test-tangerine.hipeely.com/nbn/nbn-broadband#speeds"
+  },
+  "customer": {
+    "title": "Mr",
+    "firstName": "Sam",
+    "lastName": "Test",
+    "email": "prime150@yopmail.com",
+    "phone": "0412345678",
+    "dateOfBirth": "01/02/1988"
+  },
+  "connectionAddress": {
+    "mainAddress": {
+      "fullAddress": "17 Rochester Way, MEADOW SPRINGS WA 6210",
+      "streetNumber": "17",
+      "streetName": "Rochester",
+      "streetType": "Way",
+      "suburb": "MEADOW SPRINGS",
+      "state": "WA",
+      "postcode": "6210",
+      "unitNumber": "",
+      "country": "Australia"
+    }
+  },
+  "plan": {
+    "name": "VALUE PLUS",
+    "speed": "25 Mbps"
+  },
+  "addOns": {
+    "router": {
+      "enabled": true,
+      "model": "BYO Modem"
+    }
+  },
+  "connectionDetails": {
+    "currentProvider": "Exetel",
+    "avcId": "AVC000000000000",
+    "moveInDate": "",
+    "movingProperty": false
+  },
+  "connectionDeliveryDate": "ASAP",
+  "payment": {
+    "method": "Credit Card",
+    "cardRef": "vault://test-cards/visa-success",
+    "nameOnCard": "Sam Test"
+  }
+}

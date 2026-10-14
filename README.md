@@ -9,6 +9,8 @@ when the portal changes, and it pays through an isolated executor, so no model e
 - **Portal recon:** [docs/portal-recon.md](docs/portal-recon.md)
 - **What was built:** [WHAT_I_BUILT.md](WHAT_I_BUILT.md)
 - **Video script:** [VIDEO_SCRIPT_CLEAN_RUN.md](VIDEO_SCRIPT_CLEAN_RUN.md)
+- **Test cases (manual steps):** [TEST_CASES.md](TEST_CASES.md)
+- **Plan:** [PLAN.md](PLAN.md)
 
 ## Setup
 
