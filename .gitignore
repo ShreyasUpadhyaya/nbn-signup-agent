@@ -1,0 +1,23 @@
+node_modules/
+
+# Secrets: API keys and the test-card vault stub never enter the repo
+.env
+.env.*
+!.env.example
+vault/
+*.vault.json
+
+# Run output can hold personal test data; reviewed and leak-checked, never committed
+runs/
+recon/
+test-results/
+playwright-report/
+
+# Playwright artifacts that can record typed input
+*.har
+*.zip
+*.webm
+trace/
+
+# Generated per-run payloads (fresh throwaway emails)
+payloads/generated/
