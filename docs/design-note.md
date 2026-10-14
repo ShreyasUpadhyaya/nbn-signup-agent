@@ -6,13 +6,12 @@
 payload.json ─▶ parseJob (Zod, R1) ─▶ runner: observe ▸ decide ▸ act ▸ verify ─▶ report.json
                                             │                     │
                          steps.ts (goals + postconditions)    resolver.ts (healing ladder)
-                                            │                     └─ L2: ground.ts ─▶ OpenAI (element index only)
+                                            │                     └─ L2: ground.ts ─▶ Gemini/OpenAI (element index only)
                                             └─ payment step ─▶ executor.ts ─▶ vault.ts (cardRef → card, audited)
 ```
 
-TypeScript, Playwright and Zod, plus one model call type through the OpenAI SDK. It runs on Gemini
-(`gemini-3.5-flash-lite`, via Gemini's OpenAI-compatible endpoint) or on OpenAI, set by `MODEL_PROVIDER`. I didn't use an agent framework. The loop is about 150 lines,
-so every decision it makes can be explained and tested.
+TypeScript, Playwright and Zod. The model is `gemini-3.5-flash-lite` (or OpenAI, set by `MODEL_PROVIDER`), used only for healing.
+There's no agent framework: the loop is about 150 lines, so every decision can be explained and tested.
 
 ## Agent loop (R3)
 
@@ -25,7 +24,7 @@ suggested patch.
 Postconditions check state, not clicks (R8):
 - **Plan:** the button's name becomes "Value Plus has been selected" **and** the cart reads above $0.00.
 - **Fields:** each value is read back until it sticks (the portal's reactive framework wipes fields).
-- **Checkout pages:** the URL must move on.
+- **Checkout pages:** the page must move on. If it lands somewhere unexpected, that's an L3 re-plan.
 
 Budgets cover steps (40), retries per step, total time (10 min, because the portal's address check alone takes about 17 s),
 model calls (6) and heals (10). Hitting any budget escalates.
@@ -37,7 +36,7 @@ model calls (6) and heals (10). Hitting any budget escalates.
 | L0 | Re-observe: wait, centre the element (a sticky address bar covers the bottom of the viewport), try visible duplicates, dismiss popups through a rule table | "Heads up!" popup, silent no-op plan click, cart dropping to $0.00 after choosing a modem (all real portal behaviour) |
 | L1 | Heal memory, then fallback locators in order: role and name, label, CSS hint | renamed address ID → role textbox; "Build Your Plan" → "See plans" → `a.okbutton` |
 | L2 | The model gets the goal and a pruned, redacted list of visible elements and returns **an index only** | plan buttons lose `aria-label` and `data-product-name`, and their text becomes "Add to cart"; the model picks the one under the "Value Plus" heading |
-| L3 | Goal-based step selection re-plans from page state, not step order. If the address-and-plan flow gets stuck, the page is reloaded and the flow retried (up to 3 times, as the legacy script did) | step order changes; the router/plan cart interaction |
+| L3 | Re-plan from page state. A **new required text field** is filled from the payload (label table, else the model picks a payload field *name*); a new checkbox or radio escalates, because consent is never invented. A stuck shop flow is reloaded up to 3 times. | donation moved before contact; new "Confirm Email" field (both offline tests); router/cart flakiness (live) |
 | L4 | Escalate with evidence and a suggested patch (intent, locators tried, model answer) | OTP, CAPTCHA, unknown page, budget spent |
 
 Rules applied to every heal:
@@ -81,12 +80,13 @@ human hand-off (Option C) or through a detokenising proxy (Option B), so the PAN
   This costs some "agentic" flexibility but makes the run cheap, repeatable and explainable.
 - **The executor runs in the same process as the planner.** The boundary is a module boundary, not a process boundary. JS strings can't be zeroed, so `wipe()` limits lifetime but can't erase memory.
 - **Postconditions are only as strong as their checks.** A good example: the order summary check first failed because it ran before the page rendered. It refused to pay, which is the safe failure.
-- **Stable `jobId` from a payload hash.** This makes the payment ledger idempotent, at the cost of needing a fresh payload per demo run (`npm run new-job`).
+- **Offline fixtures prove what the live portal can't show** (OTP, "Hold on!", no 3-D Secure, reordering): `npm test` runs the real agent against local pages. The fixtures are simpler than the portal, so live runs remain the final check.
+- **Stable `jobId` from a payload hash** makes the payment ledger idempotent; demo runs need a fresh payload (`--fresh`).
 
 ## With another week
 
 - Run the executor in a separate process with its own browser context (CDP), so the planner has no page access during payment.
 - Add a detokenising proxy, so the PAN never enters this process.
-- L3 for new mandatory fields: map each validation error to a payload `valueRef` chosen by the model from an allow-list.
-- Run every handout failure scenario in CI against the mutation layer, and record heal-acceptance rates.
+- Extend L3 new-field handling to select fields chosen by the model, and add page reordering to the live mutation layer.
+- Run the offline suite in CI on every commit, and record heal-acceptance rates per intent.
 - Move second-retailer support (R11) into config: intents, step detectors and popup rules per retailer, sharing the same runner.

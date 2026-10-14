@@ -1,5 +1,5 @@
 // The agent loop: observe -> decide (which goal applies now) -> act -> verify, under budgets.
-import { chromium, type Browser } from 'playwright';
+import { chromium, type Browser, type BrowserContext } from 'playwright';
 import { DEFAULT_BUDGETS, Escalate, Fail, type Budgets, type RunContext, type Status } from './context.js';
 import { STEPS, RetryFromStart, type Step } from './steps.js';
 import { clearPopups } from './popups.js';
@@ -17,6 +17,10 @@ export interface RunOptions {
   useModel?: boolean;
   dryRun?: boolean;
   budgets?: Partial<Budgets>;
+  /** Folder for run output (default runs/). */
+  runsDir?: string;
+  /** Called on the browser context before the portal opens; the offline tests use it to serve fixture pages. */
+  prepare?: (context: BrowserContext) => Promise<void>;
 }
 
 export interface Report {
@@ -40,7 +44,7 @@ export interface Report {
 setPopupClearer(clearPopups);
 
 export async function runJob(job: Job, opts: RunOptions = {}): Promise<Report> {
-  const log = new RunLog('runs', job.jobId);
+  const log = new RunLog(opts.runsDir ?? 'runs', job.jobId);
   let browser: Browser | undefined;
   const ctx = { job, log, budgets: { ...DEFAULT_BUDGETS, ...opts.budgets }, startedAt: Date.now(), useModel: opts.useModel ?? true, dryRun: !!opts.dryRun,
     guarded: false, modelCalls: 0, completedSteps: [], healingEvents: [], warnings: [], paymentState: 'not-started', facts: {} } as unknown as RunContext;
@@ -74,6 +78,7 @@ export async function runJob(job: Job, opts: RunOptions = {}): Promise<Report> {
     // tsx/esbuild wraps named functions with __name(); functions we evaluate in the page need it defined there.
     await context.addInitScript({ content: 'globalThis.__name = globalThis.__name || ((f) => f);' });
     if (opts.mutate) await context.addInitScript({ content: mutationScript(new URL(job.portal.url).origin) });
+    if (opts.prepare) await opts.prepare(context);
     ctx.page = await context.newPage();
     ctx.page.setDefaultNavigationTimeout(90_000);
     ctx.page.setDefaultTimeout(15_000);
@@ -117,7 +122,8 @@ export async function runJob(job: Job, opts: RunOptions = {}): Promise<Report> {
     if (e instanceof Escalate) { status = 'escalated'; reason = e.reason; suggestedPatch = e.suggestedPatch; }
     else if (e instanceof Fail) { status = 'failed'; reason = e.reason; }
     else { status = 'failed'; reason = `unexpected error: ${(e as Error).message?.split('\n')[0]}`; }
-    if (ctx.paymentState === 'unknown' && status === 'failed') status = 'escalated';
+    // An unexpected error after Pay Now leaves the payment unknown: a human must reconcile (scenario 17).
+    if (ctx.paymentState === 'unknown' && status === 'failed' && !(e instanceof Fail)) status = 'escalated';
     log.error(`${status.toUpperCase()}: ${reason}`);
     await saveEvidence(ctx).catch(() => {});
   } finally {
@@ -139,7 +145,7 @@ async function openPortal(ctx: RunContext) {
 }
 
 /** Decide: the first step whose precondition matches the live page. Unknown page -> re-observe, then escalate. */
-async function nextStep(ctx: RunContext): Promise<Step> {
+export async function nextStep(ctx: RunContext): Promise<Step> {
   for (let i = 0; i < 20; i++) {
     await clearPopups(ctx);
     for (const s of STEPS) if (await s.when(ctx).catch(() => false)) return s;

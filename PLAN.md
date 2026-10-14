@@ -60,8 +60,20 @@ Status key: **Done** · **Partly done** · **To do** · **Your call**
 | 4.2 | Plain-English explanation and video script | Done | [WHAT_I_BUILT.md](WHAT_I_BUILT.md), [VIDEO_SCRIPT_CLEAN_RUN.md](VIDEO_SCRIPT_CLEAN_RUN.md) |
 | 4.3 | Fix step screenshots: each named after its step, taken before leaving the page, cropped to the area worked on, header hidden, ticks visible | Done | Was wrong before: names were one step late and checkout pages were blank |
 | 4.4 | First commit pushed to GitHub | Done | `3d2f9b3` |
-| 4.5 | Screenshot fixes + this plan committed and pushed | To do | Waiting for your OK to push |
+| 4.5 | Screenshot fixes + this plan committed and pushed | Done | |
 | 4.6 | Remove or ignore the `recon/` probe images | Your call | They are from early exploration scripts. Their names describe what each probe *meant* to capture, but clicks often hit a popup first (e.g. `06-plan-selected.png` shows "Heads up!"). They are gitignored, never committed, and not used by the agent. Recommendation: delete them. |
+
+## Phase 6: Overnight hardening, 15 Oct (Done)
+
+| # | Item | Status | Notes |
+|---|---|---|---|
+| 6.1 | Run every ⏳ scenario live (1, 1b, 3, 4, 12, 14, 15) | Done | All behave as the handout expects, after fixes |
+| 6.2 | Fix bugs those runs exposed: "Sorry! Address Not Found" suggestion, wrong-suburb pick, router pressed-state, unclear card-ref reason | Done | See [REPORT.md](REPORT.md) |
+| 6.3 | Build the two missing handout items: step-order re-plan (L3), new mandatory field (L3, else L4) | Done | [src/agent/new-fields.ts](src/agent/new-fields.ts) |
+| 6.4 | Known-issue fixes: slow address check → reload; model 429 retry; scenario 7 and 16 outcomes | Done | |
+| 6.5 | Offline test suite with fixture portal (`npm test`) | Done | 20 tests; covers what the live portal can't trigger |
+| 6.6 | Interview Q&A document | Done | [INTERVIEW_QA.md](INTERVIEW_QA.md) |
+| 6.7 | Regression check live: clean payment run, mutated runs 1 and 2 | Done | Success `1792010918TCO`; L2 with 1 model call, then memory with 0 |
 
 ## Phase 5: Before 10:00 Thursday (To do, you)
 

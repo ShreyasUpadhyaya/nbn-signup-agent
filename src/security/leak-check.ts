@@ -6,6 +6,7 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { luhn } from './redact.js';
 import { vaultPath } from '../payment/vault.js';
 
@@ -67,14 +68,18 @@ function selfTest(): boolean {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-const args = process.argv.slice(2);
-if (args.includes('--self-test')) process.exit(selfTest() ? 0 : 1);
-const targets = args.length ? args : ['runs', 'heal-memory'];
-const findings = scan(targets);
-const scanned = targets.reduce((n, t) => n + [...files(t)].length, 0);
-if (findings.length) {
-  console.error(`LEAK CHECK FAILED: ${findings.length} finding(s) in ${scanned} file(s)`);
-  for (const f of findings) console.error(`  ${f.kind}: ${f.file} (${f.sample})`);
-  process.exit(1);
+function main() {
+  const args = process.argv.slice(2);
+  if (args.includes('--self-test')) process.exit(selfTest() ? 0 : 1);
+  const targets = args.length ? args : ['runs', 'heal-memory'];
+  const findings = scan(targets);
+  const scanned = targets.reduce((n, t) => n + [...files(t)].length, 0);
+  if (findings.length) {
+    console.error(`LEAK CHECK FAILED: ${findings.length} finding(s) in ${scanned} file(s)`);
+    for (const f of findings) console.error(`  ${f.kind}: ${f.file} (${f.sample})`);
+    process.exit(1);
+  }
+  console.log(`leak check passed: ${scanned} file(s) in ${targets.join(', ')} contain no card number or CVV`);
 }
-console.log(`leak check passed: ${scanned} file(s) in ${targets.join(', ')} contain no card number or CVV`);
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main();

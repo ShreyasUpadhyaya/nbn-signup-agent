@@ -215,6 +215,23 @@ After a few sign-ups with the same email, the portal asks for an OTP. The paymen
 6. **3-D Secure challenge takes 5–10 seconds**
    - Workaround: Poll for 60 seconds, auto-answer with "Authenticated (ECI 05)" for test cards
 
+7. **The router reads "Choose" while still selected (pressed) after a re-render**
+   - Fix: count a pressed "Choose BYO Modem" button as selected, so the agent doesn't click it again and toggle it off
+
+8. **"Sorry! Address Not Found" appears inside the suggestion list**
+   - Fix: it's filtered out, so the agent goes to manual entry instead of clicking it
+
+9. **The closest suggestion can be a different property (same street, other suburb)**
+   - Fix: with a structured address, only suggestions in the payload's suburb and postcode are eligible; otherwise manual entry
+
+10. **A slow address check (no result in 60 s)**
+    - Fix: treated as a timeout, so the shop flow reloads and retries (up to 3 times) instead of escalating
+
+11. **Gemini free-tier rate limits (HTTP 429)**
+    - Fix: model calls retry twice with backoff on 429 and 5xx errors
+
+Items 7–11 were found and fixed overnight on 15 Oct. Each has an offline test (`npm test`); see [REPORT.md](REPORT.md).
+
 ---
 
 ## Testing the Build

@@ -9,6 +9,7 @@ vault/
 
 # Run output can hold personal test data; reviewed and leak-checked, never committed
 runs/
+runs-test/
 recon/
 test-results/
 playwright-report/

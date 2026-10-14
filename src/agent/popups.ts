@@ -29,7 +29,16 @@ async function visibleDialog(ctx: RunContext) {
   const dlg = ctx.page.locator('[role=dialog], [aria-modal=true]').filter({ visible: true }).first();
   if (!(await dlg.count().catch(() => 0))) return undefined;
   const headings = await dlg.getByRole('heading').filter({ visible: true }).allInnerTexts().catch(() => [] as string[]);
-  return { dlg, heading: headings.map((h) => h.replace(/\s+/g, ' ').trim()).join(' / ') };
+  let heading = headings.map((h) => h.replace(/\s+/g, ' ').trim()).join(' / ');
+  // Some dialogs have no heading element and are named through aria-labelledby/aria-label instead.
+  if (!heading) {
+    heading = await dlg.evaluate((d) => {
+      const ids = (d.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+      const named = ids.map((id) => document.getElementById(id)?.textContent || '').join(' ');
+      return (named || d.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+    }).catch(() => '');
+  }
+  return { dlg, heading };
 }
 
 export async function clearPopups(ctx: RunContext): Promise<void> {

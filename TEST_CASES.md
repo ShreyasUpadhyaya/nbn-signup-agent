@@ -39,7 +39,9 @@ Every run prints a JSON report and saves `runs/<jobId>-<time>/`, which contains:
 
 **Cost rule:** only runs **without** `--dry-run` that reach Pay Now create a test order. Every test below says whether it does.
 
-**Verified** column: ✅ = I have seen this happen in a real run. ⏳ = not yet run end to end; the code path exists (file linked).
+**Two ways each scenario is proven:**
+- **Live:** run against the real test portal. ✅ = seen working in a live run on 15 Oct. "—" = the portal can't be made to show it on demand.
+- **Offline:** `npm test` runs the real agent against local fixture pages that reproduce the scenario ([tests/offline.test.ts](tests/offline.test.ts)). No network; about 17 minutes for all 20 tests.
 
 ---
 
@@ -107,27 +109,27 @@ npm run leak-check -- --self-test
 
 ## Part B: The 19 failure scenarios (Section 8)
 
-| # | Scenario | Expected outcome | How to trigger | Order? | Verified |
-|---|---|---|---|---|---|
-| 1 | No address suggestions in 30 s | Recover (manual entry) or escalate | B1 | No | ⏳ |
-| 2 | Manual form shown after a suggestion | Recover or escalate | B2 | No | ⏳ |
-| 3 | Disambiguation, no exact match | Recover with a warning | B3 | No | ⏳ |
-| 4 | Plan card not found | Reload and retry ×3, then fail | B4 | No | ⏳ |
-| 5 | Plan click does nothing | Recover from state | Happens naturally | No | ✅ |
-| 6 | Cart drops to $0 after modem | Re-select plan | Happens naturally | No | ✅ |
-| 7 | Cart still $0 at Order Now ×3 | Fail | B7 | No | ⏳ |
-| 8 | "Hold on!" popup (router, no plan) | Fail | B8 | No | ⏳ |
-| 9 | Email OTP appears | Escalate with session state | B9 | No | ⏳ |
-| 10 | Next after email does nothing | Retry ×3 | Happens naturally | No | ✅ |
-| 11 | Fields wiped after filling | Re-fill until they stick | Happens naturally | No | ✅ |
-| 12 | AVC ID check fails | Provide Later + provider | B12 | No | ⏳ |
-| 13 | Process Order click does nothing | Retry up to 30 s | Happens naturally | No | ✅ |
-| 14 | Card reference can't be resolved | Escalate | B14 | No | ⏳ |
-| 15 | Card iframe missing or wrong origin | Escalate | B15 | No | ⏳ |
-| 16 | No 3-D Secure and no transaction ID in 60 s | Fail (state unknown) | B16 | Yes | ⏳ |
-| 17 | Interrupted after Pay Now | Escalate, never retry | B17 | Yes | ⏳ |
-| 18 | Prompt injection on the page | Ignore, log, continue | A3 | No* | ✅ |
-| 19 | Selector, label or step-order change | Heal | A3 | No* | ✅ |
+| # | Scenario | Expected outcome | How to trigger live | Order? | Live | Offline |
+|---|---|---|---|---|---|---|
+| 1 | No address suggestions in 30 s | Recover (manual entry) or escalate | B1 | No | ✅ both paths | ✅ |
+| 2 | Manual form shown after a suggestion | Recover or escalate | — | No | — | ✅ |
+| 3 | Disambiguation, no exact match | Recover with a warning | B3 | No | ✅ | ✅ |
+| 4 | Plan card not found | Reload and retry ×3, then fail | B4 | No | ✅ | ✅ |
+| 5 | Plan click does nothing | Recover from state | Happens naturally | No | ✅ | ✅ |
+| 6 | Cart drops to $0 after modem | Re-select plan | Happens naturally | No | ✅ | ✅ |
+| 7 | Cart still $0 at Order Now ×3 | Fail | — | No | — | ✅ |
+| 8 | "Hold on!" popup (router, no plan) | Fail | — | No | — | ✅ |
+| 9 | Email OTP appears | Escalate with session state | B9 (not guaranteed) | No | — | ✅ |
+| 10 | Next after email does nothing | Retry ×3 | Happens naturally | No | ✅ | — |
+| 11 | Fields wiped after filling | Re-fill until they stick | Happens naturally | No | ✅ | ✅ |
+| 12 | AVC ID check fails | Provide Later + provider | B12 | No | ✅ | — |
+| 13 | Process Order click does nothing | Retry up to 30 s | Happens naturally | No | ✅ | — |
+| 14 | Card reference can't be resolved | Escalate | B14 | No | ✅ | ✅ |
+| 15 | Card iframe missing or wrong origin | Escalate | B15 | No | ✅ | ✅ |
+| 16 | No 3-D Secure and no transaction ID in 60 s | Fail (state unknown) | — | — | — | ✅ |
+| 17 | Interrupted / timed out after Pay Now | Escalate, never retry | B17 | Yes | not run (creates an order) | ✅ ledger refuses the rerun |
+| 18 | Prompt injection on the page | Ignore, log, continue | A3 | No* | ✅ | ✅ |
+| 19 | Selector, label or step-order change | Heal | A3 | No* | ✅ | ✅ (step order) |
 
 \* Add `--dry-run` to A3 for no order.
 
@@ -166,9 +168,11 @@ There is no reload in this path, as the handout says.
 npm run job -- payloads/tests/s03-ambiguous-address.json --fresh --dry-run
 ```
 **Look for:**
-- `address suggestion chosen: "…" (closest match)`
+- `address suggestion chosen: "17 ROCHESTER WAY, MEADOW SPRINGS WA 6210" (closest match)`
 - a `warnings` entry in the report: "address: no exact suggestion; chose …"
 - the run continues
+
+The payload has a structured address, so only suggestions in its suburb and postcode (MEADOW SPRINGS, 6210) are eligible. Before this rule, the agent picked "17 Rochester Way, **DIANELLA**", a different property. If none is eligible, it uses manual entry instead (`no suggestion is in MEADOW SPRINGS 6210 … not choosing a different property`).
 
 ### B4. Plan card not found (scenario 4)
 
@@ -271,14 +275,26 @@ This can't be forced on the live portal. Code: the end of `runPayment` in [src/p
 
 | Change | Expected | How it is tested | Verified |
 |---|---|---|---|
-| Renamed or removed ID | L1, else L2 | A3: address box and first-name IDs renamed | ✅ |
-| Label text changed | L1 | A3: "Build Your Plan" → "See plans" | ✅ |
-| Layout moved / names removed | L2 | A3: plan buttons lose their names; Gemini re-grounds | ✅ |
-| New blocking popup | L0 or L2 | A3: "Spring Sale!" promo popup | ✅ |
-| Silent no-op click | L0 + state check | B5 (natural) | ✅ |
-| Step order changed | L3 | Not in the mutation layer. The runner picks steps by the page it sees, not by list order, so a reordered page is still handled. | ⏳ |
-| New mandatory field | L3 if the payload can answer it, else L4 | **Not built.** The agent escalates (L4) with the portal's validation message. Listed under "With another week" in the design note. | ⏳ |
-| Payment iframe changed | L4 unless the origin is approved | B15 | ⏳ |
+| Renamed or removed ID | L1, else L2 | A3: address box and first-name IDs renamed | ✅ live |
+| Label text changed | L1 | A3: "Build Your Plan" → "See plans" | ✅ live |
+| Layout moved / names removed | L2 | A3: plan buttons lose their names; Gemini re-grounds | ✅ live |
+| New blocking popup | L0 or L2 | A3: "Spring Sale!" promo popup | ✅ live |
+| Silent no-op click | L0 + state check | B5 (natural) | ✅ live + offline |
+| Step order changed | L3 | Offline: donation moved before contact. Each page's postcondition is "left this page"; landing somewhere unexpected records an L3 re-plan, and the runner picks the step for that page. | ✅ offline |
+| New mandatory field | L3 if the payload can answer it, else L4 | Offline: a new required "Confirm Email Address" is filled from `customer.email` (L3); a new required consent checkbox escalates (L4), because consent is never invented. | ✅ offline |
+| Payment iframe changed | L4 unless the origin is approved | B15 (live) and offline | ✅ live + offline |
+
+## Part D: Offline test suite
+
+```
+npm test
+```
+It runs 20 tests in about 17 minutes, with no network. Each test drives the real agent (runner, steps, healing, payment executor) through [tests/fixture-portal.ts](tests/fixture-portal.ts), which answers every portal and Till request locally. It uses its own vault and payment ledger in `runs-test/`, never the real ones.
+
+To run one test:
+```
+npx tsx --test --test-name-pattern="Hold on" tests/offline.test.ts
+```
 
 ## Suggested order if you only have 30 minutes
 

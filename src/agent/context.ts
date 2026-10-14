@@ -12,6 +12,8 @@ export interface Budgets {
   timeLimitMs: number;
   maxModelCalls: number;
   maxHeals: number;
+  /** How long the address check may take before the shop flow is reloaded. */
+  addressResultMs: number;
 }
 
 export const DEFAULT_BUDGETS: Budgets = {
@@ -20,6 +22,7 @@ export const DEFAULT_BUDGETS: Budgets = {
   timeLimitMs: 10 * 60_000, // the legacy script used 6 min; this portal's address check alone takes ~17 s
   maxModelCalls: 6,
   maxHeals: 10,
+  addressResultMs: 60_000,
 };
 
 export interface RunContext {

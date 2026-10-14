@@ -5,6 +5,7 @@ import type { Locator, Page } from 'playwright';
 import { Escalate, Fail, type RunContext } from './context.js';
 import { checkBox, clickUntil, fillField, poll, selectOption, urlMatches } from './actions.js';
 import { clearPopups } from './popups.js';
+import { fillNewMandatoryFields } from './new-fields.js';
 import { build, commitHeal, resolve, type Intent } from '../browser/resolver.js';
 import { norm } from '../payload.js';
 import { runPayment } from '../payment/executor.js';
@@ -58,7 +59,10 @@ async function planInCart(ctx: RunContext) {
 async function routerSelected(ctx: RunContext) {
   const r = ctx.job.normalised.router;
   if (!r) return true;
-  return (await ctx.page.getByRole('tabpanel', { name: r.tab }).getByRole('button').filter({ hasText: /^\s*Selected\s*$/ }).count()) > 0;
+  // After a re-render the chosen option can read "Choose" while still pressed; clicking it again would deselect it.
+  const panel = ctx.page.getByRole('tabpanel', { name: r.tab });
+  return (await panel.getByRole('button').filter({ hasText: /^\s*Selected\s*$/ }).count()) > 0
+    || (await panel.getByRole('button', { name: `Choose ${r.option}`, pressed: true }).count()) > 0;
 }
 
 // ---------- intents (locators are hints; the resolver heals when they break) ----------
@@ -189,7 +193,8 @@ const I = {
 
 async function visibleSuggestions(page: Page, inDialog: boolean) {
   const scope = inDialog ? page.locator('[role=dialog]') : page.locator('body');
-  return scope.locator('.autocomplete-suggestion').filter({ visible: true });
+  // The portal lists "Sorry! Address Not Found" as a suggestion when nothing matches; that is not an address.
+  return scope.locator('.autocomplete-suggestion').filter({ visible: true }).filter({ hasNotText: /address not found|no results/i });
 }
 
 /** Normalise target and options (uppercase, no commas, full street types) and pick the closest. */
@@ -212,8 +217,16 @@ async function chooseSuggestion(ctx: RunContext, inDialog: boolean): Promise<boo
   const sugg = await visibleSuggestions(ctx.page, inDialog);
   const texts = await sugg.allInnerTexts();
   if (!texts.length) return false;
-  const { index, exact } = bestMatch(ctx.job.connectionAddress.mainAddress.fullAddress, texts);
-  const pick = index >= 0 ? index : 0;
+  const a = ctx.job.connectionAddress.mainAddress;
+  // With a structured address, a suggestion in another suburb or postcode is a different property: never pick it.
+  const must = ctx.job.normalised.hasStructuredAddress ? [a.suburb, a.postcode].map(norm) : [];
+  const allowed = texts.map((t, i) => ({ t, i })).filter(({ t }) => must.every((m) => norm(t).includes(m)));
+  if (!allowed.length) {
+    ctx.log.warn(`no suggestion is in ${a.suburb} ${a.postcode} (${texts.length} offered); not choosing a different property`);
+    return false;
+  }
+  const { index, exact } = bestMatch(a.fullAddress, allowed.map((x) => x.t));
+  const pick = allowed[index >= 0 ? index : 0].i;
   if (!exact) ctx.warnings.push(`address: no exact suggestion; chose "${texts[pick].trim()}" from ${texts.length}`);
   ctx.log.info(`address suggestion chosen: "${texts[pick].trim()}"${exact ? '' : ' (closest match)'}`);
   await sugg.nth(pick).click();
@@ -245,7 +258,7 @@ async function manualAddress(ctx: RunContext) {
 
 /** Waits for the address check to finish, handling disambiguation and the manual form. Never reloads. */
 async function awaitAddressResult(ctx: RunContext, allowManual: boolean) {
-  const end = Date.now() + 60_000;
+  const end = Date.now() + ctx.budgets.addressResultMs;
   let manualDone = false;
   while (Date.now() < end) {
     if (await build_(ctx).count()) return;
@@ -262,7 +275,8 @@ async function awaitAddressResult(ctx: RunContext, allowManual: boolean) {
     await clearPopups(ctx);
     await ctx.page.waitForTimeout(1000);
   }
-  throw new Escalate('Address Not Found: no result popup within 60 s');
+  // A slow portal, not a refusal: reload and retry the address and plan flow (up to 3 times).
+  throw new RetryFromStart(`address check timed out: no result popup within ${ctx.budgets.addressResultMs / 1000} s`);
 }
 const build_ = (ctx: RunContext) => ctx.page.locator('[role=dialog]').getByRole('link', { name: /build your plan|see plans/i }).filter({ visible: true })
   .or(ctx.page.locator('[role=dialog] a.okbutton').filter({ visible: true }));
@@ -338,11 +352,8 @@ const address: Step = {
       commitHeal(ctx, box, 'the address box reads back the typed address');
 
       const gotSuggestions = await poll(ctx, async () => (await (await visibleSuggestions(ctx.page, false)).count()) > 0, 30_000);
-      if (gotSuggestions) await chooseSuggestion(ctx, false);
-      else {
-        ctx.log.warn(`no suggestions within 30 s for "${typed}"`);
-        await manualAddress(ctx);
-      }
+      if (!gotSuggestions) ctx.log.warn(`no suggestions within 30 s for "${typed}"`);
+      if (!gotSuggestions || !(await chooseSuggestion(ctx, false))) await manualAddress(ctx);
     }
     await awaitAddressResult(ctx, true);
     await ctx.page.waitForTimeout(1500); // the handout's pause before Build Your Plan
@@ -420,7 +431,8 @@ const orderNow: Step = {
     for (let i = 1; (await cartTotal(ctx.page)) <= 0 || !(await planInCart(ctx)); i++) {
       if (i > 3) throw new Fail('plan missing from cart: cart still $0.00 at Order Now after 3 recovery attempts');
       ctx.log.warn(`plan missing from cart before Order Now (recovery ${i}/3)`);
-      await selectPlan(ctx);
+      // Scenario 7: these recoveries happen here, not by reloading; three failures stop the run.
+      try { await selectPlan(ctx); } catch (e) { if (!(e instanceof RetryFromStart)) throw e; }
     }
     ctx.facts.cartTotal = (await cartTotal(ctx.page)).toFixed(2);
     await snap(ctx, 'orderNow', ctx.page.getByText(/^\s*order summary\s*$/i).filter({ visible: true }), { minWidth: 900 }); // the order summary
@@ -442,10 +454,12 @@ const login: Step = {
     const otp = ctx.page.locator('#otp_code').or(ctx.page.getByRole('textbox', { name: /otp|one[- ]time|verification code/i })).filter({ visible: true });
     const seen = { outcome: 'none' as 'contact' | 'otp' | 'none' };
     await clickUntil(ctx, I.emailNext, async () => {
-      if (/contact-details/.test(ctx.page.url())) { seen.outcome = 'contact'; return true; }
       if (await otp.count()) { seen.outcome = 'otp'; return true; }
+      // Usually the contact page, but any move off the login page counts: the runner re-plans from wherever we land.
+      if (!/\/checkout\/login/.test(ctx.page.url())) { seen.outcome = 'contact'; return true; }
       return false;
     }, { attempts: 3, waitMs: 6000 });
+    if (seen.outcome === 'contact') noteReorder(ctx, 'login', /\/checkout\/contact-details/);
     const outcome = seen.outcome;
     if (outcome === 'otp') {
       await ctx.page.context().storageState({ path: ctx.log.path('session-state.json') });
@@ -472,12 +486,34 @@ const contact: Step = {
   },
 };
 
-/** Click Next and verify the URL moved on; on validation errors, report them as the escalation reason. */
+/** The portal moved somewhere other than the usual next page: record an L3 re-plan; the runner picks the step for wherever we are. */
+function noteReorder(ctx: RunContext, page: string, expected: RegExp) {
+  if (expected.test(ctx.page.url())) return;
+  const to = new URL(ctx.page.url()).pathname;
+  ctx.healingEvents.push({
+    intent: `${page}.next`, goal: 'continue the journey after this page', level: 'L3',
+    broke: `step order changed: the page after ${page} was not the usual one`, changed: `portal went to ${to}; re-planned from page state`,
+    trustedBecause: 'the runner selects the next step from the page it is on, and each step still checks its own postcondition',
+    at: new Date().toISOString(),
+  });
+  ctx.log.warn(`HEAL L3 ${page}.next: step order changed (went to ${to}); re-planning from page state`);
+}
+
+/** Click Next and verify the page moved on; on validation errors, report them as the escalation reason. */
 async function submitPage(ctx: RunContext, page: string, next: RegExp, intent: Intent = I.next(page), waitMs = 6000) {
   // The checkout form: the nearest container of the submit button holding several fields.
   await snap(ctx, page, ctx.page.getByRole('button', { name: /^\s*(next|process order.*)\s*$/i }).filter({ visible: true }), { minInputs: 2 });
-  const ok = await clickUntil(ctx, intent, () => urlMatches(ctx, next, 1000), { attempts: 3, waitMs });
-  if (ok) return;
+  // Postcondition: the page moved on. Normally to `next`; anywhere else means the step order changed (L3 re-plan).
+  const from = new URL(ctx.page.url()).pathname;
+  const movedOn = () => poll(ctx, async () => next.test(ctx.page.url()) || new URL(ctx.page.url()).pathname !== from, 1000);
+  const ok = await clickUntil(ctx, intent, movedOn, { attempts: 3, waitMs });
+  if (ok) { noteReorder(ctx, page, next); return; }
+  // L3: a required field the journey does not know about. Answer it from the payload, or escalate (L4).
+  if ((await fillNewMandatoryFields(ctx, page)) > 0 && (await clickUntil(ctx, intent, movedOn, { attempts: 2, waitMs }))) {
+    ctx.healingEvents.filter((h) => h.level === 'L3' && !h.trustedBecause).forEach((h) => { h.trustedBecause = 'the page accepted the submission and moved on'; });
+    noteReorder(ctx, page, next);
+    return;
+  }
   const errors = await ctx.page.locator('.help-block, small[data-bv-validator], .invalid-feedback, .error-message').filter({ visible: true }).allInnerTexts();
   throw new Escalate(`could not leave the ${page} page${errors.length ? `; the portal says: ${errors.join(' | ')}` : ''}`);
 }
@@ -549,6 +585,8 @@ const payment: Step = {
     ctx.log.info('payment executor result', res);
     if (!res.ok) {
       if (ctx.paymentState === 'declined') throw new Fail(res.maskedError || 'payment declined');
+      // Scenario 16: no 3-D Secure and no transaction ID. Fail (the ledger already says unknown, so it is never retried).
+      if (/^neither 3-D Secure nor a transaction ID/.test(res.maskedError || '')) throw new Fail(res.maskedError!);
       throw new Escalate(res.maskedError || 'payment executor stopped');
     }
     ctx.facts.last4 = res.last4;

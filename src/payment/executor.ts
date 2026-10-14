@@ -18,7 +18,7 @@ const origin = (u: string) => { try { return new URL(u).origin; } catch { return
 
 // ---------- idempotency ledger: never pay twice for the same job ----------
 
-const ledgerFile = () => path.resolve('runs', 'payment-ledger.json');
+const ledgerFile = () => path.resolve(process.env.PAYMENT_LEDGER || path.join('runs', 'payment-ledger.json'));
 type Ledger = Record<string, { state: string; at: string; transactionId?: string }>;
 const readLedger = (): Ledger => (existsSync(ledgerFile()) ? JSON.parse(readFileSync(ledgerFile(), 'utf8')) : {});
 export function recordPayment(jobId: string, state: string, transactionId?: string) {
@@ -109,7 +109,11 @@ export async function runPayment(ctx: RunContext): Promise<PaymentResult> {
 
     // Just in time, scoped to this job, audited by the vault.
     stage = 'resolve card';
-    card = resolveCard(job.payment.cardRef, job.jobId, 'payment-executor');
+    try {
+      card = resolveCard(job.payment.cardRef, job.jobId, 'payment-executor');
+    } catch {
+      return { ok: false, maskedError: `card reference ${job.payment.cardRef} could not be resolved; never falling back to card data from the payload, the page or the model` };
+    }
     const last4 = card.pan.slice(-4);
     const [mm, yy] = card.expiry.split('/');
     const expiry = `${mm.padStart(2, '0')}/${yy.length === 2 ? `20${yy}` : yy}`;

@@ -9,7 +9,8 @@
     "recon": "tsx scripts/recon.ts",
     "codegen": "playwright codegen --target=javascript -o recon/codegen.js https://test-tangerine.hipeely.com/nbn/nbn-broadband#speeds",
     "typecheck": "tsc --noEmit",
-    "heal:reset": "node -e \"require('fs').rmSync('heal-memory/tangerine.json',{force:true})\""
+    "heal:reset": "node -e \"require('fs').rmSync('heal-memory/tangerine.json',{force:true})\"",
+    "test": "tsx --test --test-concurrency=1 tests/offline.test.ts"
   },
   "keywords": [],
   "author": "chamanluthiya@gmail.com",

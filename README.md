@@ -10,6 +10,8 @@ when the portal changes, and it pays through an isolated executor, so no model e
 - **What was built:** [WHAT_I_BUILT.md](WHAT_I_BUILT.md)
 - **Video script:** [VIDEO_SCRIPT_CLEAN_RUN.md](VIDEO_SCRIPT_CLEAN_RUN.md)
 - **Test cases (manual steps):** [TEST_CASES.md](TEST_CASES.md)
+- **Interview prep:** [INTERVIEW_QA.md](INTERVIEW_QA.md)
+- **Overnight report (known issues fixed and tested):** [REPORT.md](REPORT.md)
 - **Plan:** [PLAN.md](PLAN.md)
 
 ## Setup
@@ -36,6 +38,7 @@ npm run job -- --fresh --mutate                   # same journey on a mutated po
 npm run job -- payloads/sample-job.json           # run a specific payload as-is
 npm run leak-check                                # scan all run output for the card number / CVV
 npm run leak-check -- --self-test                 # prove the scanner catches a planted PAN
+npm test                                          # offline suite: every failure scenario against local fixture pages (~17 min, no network)
 ```
 
 | Flag | Effect |
@@ -90,4 +93,6 @@ same address. The payment ledger (`runs/payment-ledger.json`) also refuses to pa
 | [src/payment/](src/payment) | Vault stub and the deterministic payment executor |
 | [src/security/](src/security) | Redaction and the leak check |
 | [src/mutation/mutate.ts](src/mutation/mutate.ts) | Mutation layer |
+| [src/agent/new-fields.ts](src/agent/new-fields.ts) | L3: fill a new required field from the payload, or escalate |
+| [tests/](tests) | Offline test suite and fixture portal |
 | `heal-memory/` | Healed locators, committed so they can be reviewed as diffs |
